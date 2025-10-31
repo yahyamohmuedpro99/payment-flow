@@ -1,39 +1,46 @@
-# Payment Flow - Production-Ready Fintech Backend
+# Payment Flow Backend
 
-**Backend Engineer Assessment Submission**
-
-A production-grade payment backend system with wallet management, product catalog, order processing, and payment gateway integration. Built with enterprise-level architecture focusing on financial integrity, race condition prevention, and comprehensive audit trails.
+A payment backend system with wallet management, product catalog, order processing, and payment gateway integration.
 
 ---
 
-## 📊 Project Status
+## What This Project Does
 
-- ✅ **Completion:** 100% Core Requirements + 95% Bonus Features
-- ✅ **Estimated Score:** 110/100
-- ✅ **Status:** Ready for Production
-- ✅ **Test Coverage:** Unit + E2E Tests Passing
-- ✅ **Documentation:** Complete with Architecture Diagrams
+This is a backend API for handling digital product sales with two payment methods:
+- **Wallet payments** - Users deposit funds and purchase products from their balance
+- **Stripe payments** - Credit card payments via Stripe checkout
 
----
+### Core Features
 
-## 🎯 Key Achievements
+**Authentication**
+- JWT-based authentication with access and refresh tokens
+- Role-based access control (USER/MERCHANT)
+- Password hashing with bcrypt
 
-### Core Requirements (100%)
-✅ JWT Authentication with Role-Based Access Control
-✅ Complete Wallet System with Audit Trail
-✅ Product Management with Stock Control
-✅ Race-Condition Safe Purchase Flow
-✅ Normalized Database Schema (PostgreSQL + Prisma)
-✅ Clean Architecture with TypeScript Strict Mode
-✅ Comprehensive Documentation
+**Wallet System**
+- Deposit and withdraw funds
+- Complete transaction audit trail
+- Atomic balance updates to prevent data inconsistency
+- Transaction history with pagination
 
-### Bonus Features (95%)
-✅ Stripe Payment Gateway Integration
-✅ Advanced Error Handling (Custom Exceptions + Filters)
-✅ TypeScript Strict Mode Enabled
-✅ Comprehensive Testing (Unit + E2E)
-✅ Redis Caching for Performance
-✅ Swagger/OpenAPI Documentation
+**Product Management**
+- Merchants can create and manage products
+- Stock management with race condition prevention
+- Product caching with Redis
+- Only product owners can modify their products
+
+**Order Processing**
+- Purchase products using wallet balance or Stripe
+- Atomic transactions ensure stock and balance are always consistent
+- Prevents overselling when multiple users buy simultaneously
+- Order history for users and sales tracking for merchants
+
+**Additional Features**
+- Stripe payment gateway integration
+- Global error handling
+- Input validation
+- Redis caching for performance
+- Swagger API documentation
 
 ---
 
@@ -469,35 +476,46 @@ payment-flow/
 
 ---
 
-## 🎯 How Requirements Were Achieved
+## Implementation Details
 
-### 1. Authentication & Authorization ✅
-- **Implementation:** Passport JWT strategy, bcrypt hashing, role-based guards
-- **Key Features:** Global JWT guard, refresh tokens, role decorators
+### Authentication & Authorization
+- Uses Passport JWT strategy for token validation
+- Passwords hashed with bcrypt
+- Global JWT guard applied to all routes by default
+- Public routes marked with `@Public()` decorator
+- Role-based guards for USER/MERCHANT access control
 
-### 2. Wallet System ✅
-- **Implementation:** Atomic transactions with SERIALIZABLE isolation
-- **Key Features:** Balance snapshots (before/after), immutable audit trail
+### Wallet System
+- All wallet operations use database transactions with SERIALIZABLE isolation level
+- Each transaction creates an immutable log entry with before/after balance
+- Prevents data inconsistency even under concurrent operations
 
-### 3. Product Management ✅
-- **Implementation:** CRUD operations with Redis caching
-- **Key Features:** 60s TTL cache, ownership validation, cache invalidation
+### Product Management
+- Standard CRUD operations for products
+- Product list cached in Redis with 60s TTL
+- Cache automatically invalidated when products are created/updated/deleted
+- Ownership validation ensures only the merchant who created a product can modify it
 
-### 4. Purchase Flow ✅
-- **Implementation:** Pessimistic locking with FOR UPDATE
-- **Key Features:** Race condition prevention, atomic operations, dual payment methods
+### Purchase Flow
+- Uses pessimistic locking (`SELECT FOR UPDATE`) to prevent race conditions
+- Transaction locks the product row before checking stock
+- All operations (balance check, stock decrement, order creation) happen atomically
+- If any step fails, entire transaction is rolled back
 
-### 5. Payment Gateway ✅
-- **Implementation:** Stripe checkout sessions, webhook verification
-- **Key Features:** Pending order creation, async completion, signature validation
+### Payment Gateway
+- Stripe checkout sessions for credit card payments
+- Webhook endpoint receives payment confirmation from Stripe
+- Verifies webhook signature for security
+- Completes pending orders when payment succeeds
 
-### 6. Testing ✅
-- **Implementation:** Jest unit tests, Supertest E2E tests
-- **Coverage:** Auth, wallets, products, orders, authorization
+### Testing
+- Unit tests for core services (Auth, Wallets)
+- E2E tests for complete user flows
+- Automated test script that calls all API endpoints
 
 ---
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Database Connection Issues
 ```bash
@@ -519,11 +537,15 @@ pnpm prisma:generate
 
 ---
 
-## 📝 Additional Documentation
+## Additional Documentation
 
 - **[Backend README](backend/README.md)** - Detailed backend documentation
 - **[Architecture Guide](ARCHITECTURE.md)** - System architecture details
-- **[Test Guide](COMPLETE_TEST_GUIDE.md)** - Comprehensive testing guide
+- **[Test Guide](COMPLETE_TEST_GUIDE.md)** - API testing guide
 - **[API Docs](http://localhost:3000/api/docs)** - Interactive Swagger documentation
 
 ---
+
+## License
+
+UNLICENSED - For assessment purposes only
