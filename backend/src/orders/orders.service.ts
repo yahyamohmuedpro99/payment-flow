@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException, BadRequestException } from '@nes
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../database/prisma.service';
 import { WalletsService } from '../wallets/wallets.service';
+import { StripeService } from '../common/services/stripe.service';
 import { PaymentMethod, OrderStatus, Prisma } from '@prisma/client';
 import {
   ProductOutOfStockException,
@@ -25,6 +26,7 @@ export class OrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly walletsService: WalletsService,
+    private readonly stripeService: StripeService,
     private readonly configService: ConfigService,
   ) {}
 
@@ -48,7 +50,7 @@ export class OrdersService {
         // Lock product row (CRITICAL: Prevents race conditions)
         const product = await tx.$queryRaw<any[]>`
           SELECT * FROM products
-          WHERE id = ${createOrderDto.productId}::uuid
+          WHERE id = ${createOrderDto.productId}
           FOR UPDATE
         `;
 
@@ -150,8 +152,92 @@ export class OrdersService {
   async createGatewayOrder(userId: string, createOrderDto: CreateOrderDto) {
     this.logger.log(`Creating gateway order: User ${userId}, Product ${createOrderDto.productId}`);
 
-    // This will be implemented with Stripe integration
-    throw new BadRequestException('Gateway payment not yet implemented');
+    const idempotencyKey = randomUUID();
+
+    // Get product details
+    const product = await this.prisma.product.findUnique({
+      where: { id: createOrderDto.productId },
+      include: {
+        merchant: {
+          select: {
+            id: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    if (!product) {
+      throw new ProductNotFoundException(createOrderDto.productId);
+    }
+
+    if (!product.isActive) {
+      throw new BadRequestException('Product is not active');
+    }
+
+    if (product.availableUnits <= 0) {
+      throw new ProductOutOfStockException(product.name);
+    }
+
+    // Get user details
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { email: true },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const amount = Number(product.price);
+
+    // Create Stripe checkout session
+    const session = await this.stripeService.createCheckoutSession(
+      product.id,
+      product.name,
+      amount,
+      1, // quantity (currently only support 1 unit per order)
+      userId,
+      user.email,
+    );
+
+    // Create pending order in database
+    const order = await this.prisma.order.create({
+      data: {
+        userId,
+        productId: createOrderDto.productId,
+        merchantId: product.merchantId,
+        paymentMethod: PaymentMethod.GATEWAY,
+        status: OrderStatus.PENDING,
+        amount,
+        currency: 'USD',
+        idempotencyKey,
+        stripeSessionId: session.id,
+      },
+      include: {
+        product: {
+          select: {
+            id: true,
+            name: true,
+            price: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            email: true,
+          },
+        },
+      },
+    });
+
+    this.logger.log(`Gateway order created: ${order.id}, Stripe session: ${session.id}`);
+
+    return {
+      order,
+      checkoutUrl: session.url,
+      sessionId: session.id,
+    };
   }
 
   /**
@@ -163,6 +249,104 @@ export class OrdersService {
     } else {
       return this.createGatewayOrder(userId, createOrderDto);
     }
+  }
+
+  /**
+   * Complete gateway order after successful payment
+   * Called by webhook handler
+   */
+  async completeGatewayOrder(sessionId: string, paymentIntentId: string) {
+    this.logger.log(`Completing gateway order for session: ${sessionId}`);
+
+    const order = await this.prisma.order.findFirst({
+      where: { stripeSessionId: sessionId },
+      include: {
+        product: true,
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException(`Order not found for session ${sessionId}`);
+    }
+
+    if (order.status === OrderStatus.COMPLETED) {
+      this.logger.warn(`Order ${order.id} already completed`);
+      return order;
+    }
+
+    // Complete order in transaction
+    const completedOrder = await this.prisma.$transaction(
+      async (tx) => {
+        // Lock product row
+        const product = await tx.$queryRaw<any[]>`
+          SELECT * FROM products
+          WHERE id = ${order.productId}
+          FOR UPDATE
+        `;
+
+        if (!product || product.length === 0) {
+          throw new ProductNotFoundException(order.productId);
+        }
+
+        const lockedProduct = product[0];
+
+        // Check stock
+        if (lockedProduct.available_units <= 0) {
+          throw new ProductOutOfStockException(lockedProduct.name);
+        }
+
+        // Credit merchant wallet
+        await this.walletsService.creditToWallet(
+          tx,
+          order.merchantId,
+          Number(order.amount),
+          'order',
+          order.idempotencyKey || randomUUID(),
+          `Sale: ${order.product.name} (Stripe)`,
+        );
+
+        // Decrement stock
+        await tx.product.update({
+          where: { id: order.productId },
+          data: {
+            availableUnits: {
+              decrement: 1,
+            },
+          },
+        });
+
+        // Update order status
+        const updated = await tx.order.update({
+          where: { id: order.id },
+          data: {
+            status: OrderStatus.COMPLETED,
+            stripePaymentIntentId: paymentIntentId,
+            completedAt: new Date(),
+          },
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                price: true,
+              },
+            },
+            user: {
+              select: {
+                id: true,
+                email: true,
+              },
+            },
+          },
+        });
+
+        return updated;
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+
+    this.logger.log(`Gateway order completed: ${completedOrder.id}`);
+    return completedOrder;
   }
 
   /**

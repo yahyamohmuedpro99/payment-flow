@@ -2,8 +2,6 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { CacheModule } from '@nestjs/cache-manager';
 import { APP_GUARD, APP_FILTER } from '@nestjs/core';
-import { AppController } from './app.controller';
-import { AppService } from './app.service';
 
 // Configuration
 import { appConfig } from './config/app.config';
@@ -17,6 +15,7 @@ import { AuthModule } from './auth/auth.module';
 import { WalletsModule } from './wallets/wallets.module';
 import { ProductsModule } from './products/products.module';
 import { OrdersModule } from './orders/orders.module';
+import { WebhooksModule } from './webhooks/webhooks.module';
 
 // Guards
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
@@ -47,11 +46,10 @@ import { PrismaExceptionFilter } from './common/filters/prisma-exception.filter'
     WalletsModule,
     ProductsModule,
     OrdersModule,
+    WebhooksModule,
   ],
-  controllers: [AppController],
+  controllers: [],
   providers: [
-    AppService,
-
     // Global guards
     {
       provide: APP_GUARD,
